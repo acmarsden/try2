@@ -1,0 +1,50 @@
+keychain.init(password)
+    1. generate salt
+    2. generate master key KDF(password, salt)
+    3. generate mac and aes key from master key and some other string
+    4. Initialize data arrays...
+   ********************
+    priv.data.salt = randomBitarray(128)
+    priv.secret.master_key = KDF(password, priv.data.salt)
+    priv.secret.mac_key = HMAC(priv.secret.master_key, 'some type of string...')
+    priv.secret.aes_key = HMAC(priv.secret.master_key, 'another type of string')
+    cipher = setupCipher(aes_key)
+    add to keychain hmac(hmac_key, 'random word') for password validation
+    
+   
+keychain.dump()
+    1. Construct representation: keychain includes HMAC of domain name, aes encryption     of the password, with associated data as the domain name. Add at the beginning the     hmac(hmac_key, random word) where hmac_key is constructed from the main password.
+    2. hash the keychain
+    3. Serialize everything.
+    ? I guess we don't actually construct the keychain here though
+    
+    
+    
+keychain.load(password, representation, trustedDataCheck)
+    1. generate the hmac key from the password and compute hmac(hmac_key_new, randomword) to see if it matches what is in the KVS from the representation.
+    ? Is it hard to de-serialize?
+    2. if trustedDataCheck then compute the hash of the rep and make sure it matches what is given. 
+    ? How does this guarantee security? Because the hash doesn't actually require a key, so couldn't the adversary submit the correct hash of the representation.
+    
+    
+keychain.set(name, value)
+    0. pad the password first.
+    1. construct aes encryption of the value with the domain name as included data
+    2. store hmac of the domain name
+   ***********************
+   We need to setup the cipher somewhere, should that be done in keychain.load?
+   password = encryptWithGCM(priv.secret.cipher, value, name)
+   domain = HMAC(hmac_key, name)
+    
+    
+keychain.get(name)
+    1. so this assumes I've already input the correct password?
+    2. decrypt password and make sure that it matches the domain name as well.
+    
+    mac_name = HMAC(priv.secret.mac_key, name)
+    Search for mac_name in KVS
+
+keychain.remove(name)
+    1. same as keychain.get but remove rather than return
+    
+    
