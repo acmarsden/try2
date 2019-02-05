@@ -4,12 +4,12 @@
 /********* External Imports ********/
 
 var lib = require("./lib");
+var sjcl = require("./sjcl");
 
 var KDF = lib.KDF,
     HMAC = lib.HMAC,
     SHA256 = lib.SHA256,
     setupCipher = lib.setupCipher,
-    bitarrayToHex = lib.bitarrayToHex,
     encryptwithGCM = lib.encryptwithGCM,
     decryptWithGCM = lib.decryptWithGCM,
     bitarraySlice = lib.bitarraySlice,
@@ -25,6 +25,13 @@ var KDF = lib.KDF,
     bitarrayConcat = lib.bitarrayConcat,
     objectHasKey = lib.objectHasKey;
 
+var bitarrayToHex = function(bitarray) {
+  return sjcl.codec.hex.fromBits(bitarray);
+};
+
+var hexToBitarray = function(hexStr) {
+  return sjcl.codec.hex.toBits(hexStr);
+};
 
 /********* Implementation ********/
 
@@ -66,7 +73,7 @@ var keychainClass = function() {
     priv.secrets.mac_key = HMAC(priv.secrets.master_key,"mac key generator");
 
     // Generates aes key from HMACing master key with another arbitrary string
-    priv.secrets.aes_key = HMAC(priv.secrets.master_key,"aes key generator");
+    priv.secrets.aes_key = HMAC(priv.secrets.master_key,"aes key generator").slice(0,4);
 
     // The password authentication 
     priv.data.password_authentication = HMAC(priv.secrets.mac_key,"another arbitrary string");
@@ -74,7 +81,8 @@ var keychainClass = function() {
     // Setup cipher
     priv.secrets.cipher = setupCipher(priv.secrets.aes_key);
 
-    priv.data.KVS = {};
+    // Initializes keychain
+    priv.data.kvs = {};
 
     ready = true;
   };
@@ -102,26 +110,26 @@ var keychainClass = function() {
       // Make sure keychain has not been tampered with
       if ( !(trustedDataCheck==undefined) ) {
         var sha_check = SHA256(repr);
-        if ( !bitArrayEqual(sha_check,trustedDataCheck) ) {
+        if ( !bitarrayEqual(sha_check,trustedDataCheck) ) {
           throw "Tampering detected!!";
         }
       }
 
       // Password authentication
       var data = JSON.parse(repr);
-      var master_key = KDF(password,priv.data.salt);
+      var master_key = KDF(password,data.salt);
       var mac_key = HMAC(master_key,"mac key generator");
       var pass_hmac = HMAC(mac_key,"another arbitrary string");
-      if ( !bitArrayEqual(pass_hmac,data.password_authentication) ) {
+      if ( !bitarrayEqual(pass_hmac,data.password_authentication) ) {
         return false;
       }
 
+      priv.data = data;
       // If everything passed, loads the keychain
       priv.secrets.master_key = master_key;
       priv.secrets.mac_key = mac_key;
-      priv.secrets.aes_key = HMAC(master_key,"aes key generator");
+      priv.secrets.aes_key = HMAC(master_key,"aes key generator").slice(0,4);
       priv.secrets.cipher = setupCipher(priv.secrets.aes_key);    
-      priv.data=data;
       ready = true;
       return true;
   };
@@ -165,8 +173,10 @@ var keychainClass = function() {
       }
 
       var hmac_domain = HMAC(priv.secrets.mac_key,name);
-      if (hmac_domain in priv.data.KVS) {
-        /* do stuff */
+      var domain_string = bitarrayToHex(hmac_domain);
+      if (domain_string in priv.data.kvs) {
+        var value_store = decryptWithGCM(priv.secrets.cipher,hexToBitarray(priv.data.kvs[domain_string]),hmac_domain);
+        return paddedBitarrayToString(value_store,MAX_PW_LEN_BYTES);
       }
       return null;
   };
@@ -187,8 +197,10 @@ var keychainClass = function() {
       if (!ready) {
         throw "Keychain not initialized.";
       }
-      var hmac_domain = bitarrayToHex(HMAC(priv.secrets.mac_key,name));
-      var value_store = encryptWithGCM(priv.secrets.cipher, value, name);
+      var hmac_domain = HMAC(priv.secrets.mac_key,name);
+      var padded_value = stringToPaddedBitarray(value,MAX_PW_LEN_BYTES);
+      var value_store = bitarrayToHex(encryptwithGCM(priv.secrets.cipher, padded_value, hmac_domain));
+      priv.data.kvs[bitarrayToHex(hmac_domain)] = value_store;
   };
 
   /**
@@ -201,10 +213,23 @@ var keychainClass = function() {
     * Return Type: boolean
   */
   keychain.remove = function(name) {
-      throw "Not implemented!";
+      //throw "Not implemented!";
+      if (!ready) {
+        throw "Keychain not initialized."
+      }
+      var hmac_domain = bitarrayToHex(HMAC(priv.secrets.mac_key,name));
+      if (hmac_domain in priv.data.kvs) {
+        delete priv.data.kvs[hmac_domain];
+        return true;
+      }
+      return false;
+
   };
 
   return keychain;
 };
 
 module.exports.keychain = keychainClass;
+
+let chain = new keychainClass('password');
+console.log(chain);
