@@ -25,6 +25,7 @@ var KDF = lib.KDF,
     bitarrayConcat = lib.bitarrayConcat,
     objectHasKey = lib.objectHasKey;
 
+// Functions from sjcl
 var bitarrayToHex = function(bitarray) {
   return sjcl.codec.hex.fromBits(bitarray);
 };
@@ -67,6 +68,7 @@ var keychainClass = function() {
 
     // Generates a random salt
     priv.data.salt = randomBitarray(128);
+    // Creates master key by KDFing the password with the salt
     priv.secrets.master_key = KDF(password,priv.data.salt);
 
     // Generates mac key from HMACing master key with arbitrary string 
@@ -75,7 +77,7 @@ var keychainClass = function() {
     // Generates aes key from HMACing master key with another arbitrary string
     priv.secrets.aes_key = HMAC(priv.secrets.master_key,"aes key generator").slice(0,4);
 
-    // The password authentication 
+    // The password authentication. Password is checked against the HMAC of the mac_key with "another arbitrary string"
     priv.data.password_authentication = HMAC(priv.secrets.mac_key,"another arbitrary string");
 
     // Setup cipher
@@ -84,6 +86,7 @@ var keychainClass = function() {
     // Initializes keychain
     priv.data.kvs = {};
 
+    // Ready after successfully initialized
     ready = true;
   };
 
@@ -105,8 +108,6 @@ var keychainClass = function() {
     * Return Type: boolean
     */
   keychain.load = function(password, repr, trustedDataCheck) {
-      // throw "Not implemented!";
-
       // Make sure keychain has not been tampered with
       if ( !(trustedDataCheck==undefined) ) {
         var sha_check = SHA256(repr);
@@ -124,12 +125,14 @@ var keychainClass = function() {
         return false;
       }
 
-      priv.data = data;
       // If everything passed, loads the keychain
+      priv.data = data;
       priv.secrets.master_key = master_key;
       priv.secrets.mac_key = mac_key;
       priv.secrets.aes_key = HMAC(master_key,"aes key generator").slice(0,4);
       priv.secrets.cipher = setupCipher(priv.secrets.aes_key);    
+
+      // Password was authenticated so we're in the ready state
       ready = true;
       return true;
   };
@@ -148,12 +151,13 @@ var keychainClass = function() {
     * Return Type: array
     */ 
   keychain.dump = function() {
+      // If init/load wasn't successfully called, don't do anything
       if (! ready) {
         return null;
       }
+      // Return the JSON representation and its SHA256
       var repr = JSON.stringify(priv.data);
       return [repr,SHA256(repr)];
-      // throw "Not implemented!";
   };
 
   /**
@@ -167,11 +171,12 @@ var keychainClass = function() {
     * Return Type: string
     */
   keychain.get = function(name) {
-      //throw "Not implemented!";
+      // If init/load not successful, throw exception
       if (!ready) {
         throw "Keychain not initialized.";
       }
 
+      // Searches for the HMAC of the domain name in the kvs. If in the kvs, decrypts and returns password
       var hmac_domain = HMAC(priv.secrets.mac_key,name);
       var domain_string = bitarrayToHex(hmac_domain);
       if (domain_string in priv.data.kvs) {
@@ -193,10 +198,11 @@ var keychainClass = function() {
   * Return Type: void
   */
   keychain.set = function(name, value) {
-      //throw "Not implemented!";
+      // If not successfully init/load, throw an exception
       if (!ready) {
         throw "Keychain not initialized.";
       }
+      // key is the HMAC of the domain, value is gcm encrypted password with the HMAC of the domain as the associated data (to fight swap attacks)
       var hmac_domain = HMAC(priv.secrets.mac_key,name);
       var padded_value = stringToPaddedBitarray(value,MAX_PW_LEN_BYTES);
       var value_store = bitarrayToHex(encryptwithGCM(priv.secrets.cipher, padded_value, hmac_domain));
@@ -213,10 +219,10 @@ var keychainClass = function() {
     * Return Type: boolean
   */
   keychain.remove = function(name) {
-      //throw "Not implemented!";
       if (!ready) {
         throw "Keychain not initialized."
       }
+      // Delete the entry if it's in the kvs
       var hmac_domain = bitarrayToHex(HMAC(priv.secrets.mac_key,name));
       if (hmac_domain in priv.data.kvs) {
         delete priv.data.kvs[hmac_domain];
